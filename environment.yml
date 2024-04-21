@@ -7,6 +7,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - git
   - _libgcc_mutex=0.1=conda_forge
   - _openmp_mutex=4.5=2_gnu
   - asttokens=2.4.1=pyhd8ed1ab_0
@@ -198,7 +199,7 @@ dependencies:
       - trl==0.8.3
       - tyro==0.8.3
       - tzdata==2024.1
-      - unsloth==2024.4
+      # - unsloth==2024.4
       - urllib3==2.2.1
       - wandb==0.16.6
       - xxhash==3.4.1
