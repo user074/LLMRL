@@ -6,24 +6,51 @@ import os
 wandb.login()
 os.environ['WANDB_PROJECT'] = 'LLMRL'
 
-model = LlamaForSequenceClassification.from_pretrained("checkpoints/tinyLlama-GSM8K-10epochs", num_labels = 3)
-# model = LlamaForCausalLM.from_pretrained("checkpoints/tinyLlama-GSM8K-10epochs")
+from unsloth.models.loader import FastLanguageModel
+import torch
+max_seq_length = 2048 # Choose any! We auto support RoPE Scaling internally!
+dtype = None # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
+load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be False.
 
-tokenizer = AutoTokenizer.from_pretrained("checkpoints/tinyLlama-GSM8K-10epochs", padding_side='right', use_fast          = False)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#to cuda
-model.to(device)
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "checkpoints/llama3-8b-gsm8k-1epoch", # "unsloth/tinyllama" for 16bit loading
+    max_seq_length = max_seq_length,
+    dtype = dtype,
+    load_in_4bit = load_in_4bit,
+    sequence_classification = True,
+    num_labels = 3,
+    # token = "hf_...", # use one if using gated models like meta-llama/Llama-2-7b-hf
+)
 
-from transformers import AutoTokenizer
+#well for llama3 'pre-trained models usually do not stop completions naturally.'
+#https://github.com/meta-llama/llama3/blob/main/example_text_completion.py
 
+#Use LoRA to reduce memory usage:
+model = FastLanguageModel.get_peft_model(
+    model,
+    r = 32, # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
+                      "gate_proj", "up_proj", "down_proj",],
+    lora_alpha = 32,
+    lora_dropout = 0, # Currently only supports dropout = 0
+    bias = "none",    # Currently only supports bias = "none"
+    use_gradient_checkpointing = False, # @@@ IF YOU GET OUT OF MEMORY - set to True @@@
+    random_state = 3407,
+    use_rslora = False,  # We support rank stabilized LoRA
+    loftq_config = None, # And LoftQ
+)
+
+from transformers import LlamaForSequenceClassification, AutoTokenizer, LlamaForCausalLM
+import torch
 
 EOS_TOKEN = tokenizer.eos_token  # End-of-Sequence token
-prompt = """
-### Input:
-{}
+prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
-### Response:
+You are a helpful assistant to solve math problems step by step <|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
 {}"""
 
 def formatting_prompts_func(examples):
@@ -35,7 +62,7 @@ def formatting_prompts_func(examples):
         combined_responses = "\n".join(responses) + "\n" + next_response
         
         # Format the text with the prompt template
-        text = prompt.format(instruction, combined_responses) + EOS_TOKEN
+        text = prompt.format(instruction, combined_responses) 
         texts.append(text)
         labels.append(rating + 1)  # Convert ratings to labels by adding 1
 
@@ -54,6 +81,10 @@ dataset = load_dataset("Birchlabs/openai-prm800k-stepwise-critic", split='train'
 dataset = dataset.filter(lambda x: x['rating'] is not None)  # Filter entries without ratings
 dataset = dataset.map(formatting_prompts_func, batched=True)  # Apply the preprocessing function
 
+# test_dataset = load_dataset("Birchlabs/openai-prm800k-stepwise-critic", split='test')
+# test_dataset = test_dataset.filter(lambda x: x['rating'] is not None)  # Filter entries without ratings
+# test_dataset = test_dataset.map(formatting_prompts_func, batched=True) 
+
 from transformers import TrainerCallback
 
 class PrintLossCallback(TrainerCallback):
@@ -62,8 +93,6 @@ class PrintLossCallback(TrainerCallback):
         if 'loss' in logs:
             print(f"Step {state.global_step}: Loss {logs['loss']:.4f}")
             
-
-
 from transformers import TrainingArguments, Trainer
 from datasets import load_dataset
 from transformers import TrainingArguments, Trainer
@@ -83,8 +112,9 @@ def compute_metrics(eval_pred):
 
 # Define TrainingArguments
 training_args = TrainingArguments(
-    output_dir='./checkpoints/tinyLlama-critic',          # Output directory
+    output_dir='./checkpoints/llama3-critic-1epoch',          # Output directory
     num_train_epochs=1,              # Total number of training epochs
+    bf16=True,                       # Use bfloat16 for training
     per_device_train_batch_size=4,   # Batch size per device during training
     gradient_accumulation_steps=4,       # Number of update steps to accumulate before performing a backward/update pass
     warmup_ratio=0.03,                # Number of warmup steps for learning rate scheduler
@@ -96,7 +126,7 @@ training_args = TrainingArguments(
     evaluation_strategy="no",     # Evaluate each `logging_steps`
     save_strategy="steps",           # Save a checkpoint at the end of each epoch
     save_steps=10000,                   # Number of updates steps before saving
-    save_total_limit=1,              # Maximum number of checkpoints to keep
+    save_total_limit=2,              # Maximum number of checkpoints to keep
     # load_best_model_at_end=True,     # Load the best model at the end of training based on metric (if evaluation is enabled)
     report_to="wandb",               # Enable logging to W&B
 )
@@ -106,15 +136,12 @@ trainer = Trainer(
     model=model,                    # The instantiated 🤗 Transformers model to be trained
     args=training_args,             # Training arguments, defined above
     train_dataset=dataset,          # Training dataset
-    # eval_dataset=dataset,           # Evaluation dataset
+    # eval_dataset=test_dataset,           # Evaluation dataset
     # compute_metrics=compute_metrics, # The callback that computes metrics of interest
-    callbacks=[PrintLossCallback()]
+    # callbacks=[PrintLossCallback()]
 )
 
 # Train the model
 trainer.train()
 
-# Assuming the Trainer has completed training
-model_path = "./checkpoints/tinyLlama-critic"
-model.save_pretrained(model_path)
-tokenizer.save_pretrained(model_path)
+model.save_pretrained_merged("checkpoints/llama3-critic-1epoch", tokenizer, save_method = "merged_16bit",)
