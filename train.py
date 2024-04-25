@@ -41,8 +41,7 @@ model = FastLanguageModel.get_peft_model(
     loftq_config = None, # And LoftQ
 )
 
-from transformers import LlamaForSequenceClassification, AutoTokenizer, LlamaForCausalLM
-import torch
+
 
 EOS_TOKEN = tokenizer.eos_token  # End-of-Sequence token
 prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
