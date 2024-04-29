@@ -16,7 +16,7 @@ load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be Fals
 # checkpoint_path = "checkpoints/llama3-8b-critic-lora-Math-Shepherd-lowlr/checkpoint-15000"
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = 'unsloth/llama-3-8b', # "unsloth/tinyllama" for 16bit loading
+    model_name = 'checkpoints/llama3-8b-critic-lora-4-28/checkpoint-5000', # "unsloth/tinyllama" for 16bit loading
     max_seq_length = max_seq_length,
     dtype = dtype,
     load_in_4bit = load_in_4bit,
@@ -24,19 +24,19 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 )
 
 #Use LoRA to reduce memory usage:
-model = FastLanguageModel.get_peft_model(
-    model,
-    r = 256, # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
-    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
-                      "gate_proj", "up_proj", "down_proj",],
-    lora_alpha = 512,
-    lora_dropout = 0, # Currently only supports dropout = 0
-    bias = "none",    # Currently only supports bias = "none"
-    use_gradient_checkpointing = "unsloth", # @@@ IF YOU GET OUT OF MEMORY - set to True @@@
-    random_state = 3407,
-    use_rslora = False,  # We support rank stabilized LoRA
-    loftq_config = None, # And LoftQ
-)
+# model = FastLanguageModel.get_peft_model(
+#     model,
+#     r = 256, # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+#     target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
+#                       "gate_proj", "up_proj", "down_proj",],
+#     lora_alpha = 512,
+#     lora_dropout = 0, # Currently only supports dropout = 0
+#     bias = "none",    # Currently only supports bias = "none"
+#     use_gradient_checkpointing = "unsloth", # @@@ IF YOU GET OUT OF MEMORY - set to True @@@
+#     random_state = 3407,
+#     use_rslora = False,  # We support rank stabilized LoRA
+#     loftq_config = None, # And LoftQ
+# )
 
 
 # prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -141,6 +141,6 @@ trainer = Trainer(
     ),
 )
 
-trainer_stats = trainer.train()
+trainer_stats = trainer.train(resume_from_checkpoint='checkpoints/llama3-8b-critic-lora-4-28/checkpoint-5000')
 
 model.save_pretrained("checkpoints/llama3-8b-critic-lora-4-28") # Local saving
