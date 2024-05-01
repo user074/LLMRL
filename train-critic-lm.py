@@ -126,7 +126,7 @@ trainer = Trainer(
         gradient_accumulation_steps = 4,
         warmup_ratio = 0.1,
         num_train_epochs = 1,
-        learning_rate = 1e-6,
+        learning_rate = 2e-5,
         fp16 = not torch.cuda.is_bf16_supported(),
         bf16 = torch.cuda.is_bf16_supported(),
         logging_steps = 10,
@@ -136,11 +136,11 @@ trainer = Trainer(
         weight_decay = 0.1,
         lr_scheduler_type = "cosine",
         seed = 3407,
-        output_dir = "checkpoints/llama3-8b-critic-lora-4-28",
+        output_dir = "checkpoints/llama3-8b-critic-lora-4-29",
         report_to= "wandb",
     ),
 )
 
 trainer_stats = trainer.train()
 
-model.save_pretrained("checkpoints/llama3-8b-critic-lora-4-28") # Local saving
+model.save_pretrained("checkpoints/llama3-8b-critic-lora-4-29") # Local saving

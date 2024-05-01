@@ -15,7 +15,7 @@ load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be Fals
 
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "unsloth/llama-3-8b", # "unsloth/tinyllama" for 16bit loading
+    model_name = "unsloth/tinyllama", # "unsloth/tinyllama" for 16bit loading
     max_seq_length = max_seq_length,
     dtype = dtype,
     load_in_4bit = load_in_4bit,
@@ -81,11 +81,30 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 dataset = load_dataset("peiyi9979/Math-Shepherd", split='train')
 
 def tokenize_function(examples):
-    return tokenizer(examples["input"], padding="max_length", truncation=True,  max_length=512)
+    inputs = examples["input"]
+    # Replace the ки with step_tag for each input example
+    inputs = [input.replace('ки\n', 'ки \n') for input in inputs]
+    return tokenizer(inputs, padding="max_length", truncation=True, max_length=512)
 
 def tokenize_labels_function(examples):
-    tokenized_labels = tokenizer(examples["label"], padding="max_length", truncation=True,  max_length=512)
-    return {"labels": tokenized_labels["input_ids"]}
+    labels_list = examples["label"]
+    tokenized_labels = []
+    
+    for labels in labels_list:
+        # Replace the + and - with good_token and bad_token, while keeping them in the solution
+        labels = labels.replace('+\n', '+ \n')
+        labels = labels.replace('-\n', '- \n')
+        
+        # # Replace the last token with the appropriate special token
+        # if labels[-1] == '+':
+        #     labels = labels[:-1] + good_token
+        # else:
+        #     labels = labels[:-1] + bad_token
+        
+        tokenized_label = tokenizer(labels, padding="max_length", truncation=True, max_length=512)
+        tokenized_labels.append(tokenized_label["input_ids"])
+    
+    return {"labels": tokenized_labels}
 
 dataset = dataset.map(tokenize_function, batched=True)
 dataset = dataset.map(tokenize_labels_function, batched=True)
