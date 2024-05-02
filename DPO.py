@@ -87,18 +87,28 @@ def compute_probabilities(all_answers, critic_tokenizer, critic, batch_size=32, 
             for answer in answers:
                 if '### Response:' in answer:
                     result = answer.split('### Response:')[0]
-                    responses = answer.split('### Response:\n')[1].split('\n')
+                    if len(answer.split('### Response:\n')) > 1:
+                        responses = answer.split('### Response:\n')[1].split('\n')
+                    else:
+                        responses = ['']
                     num_responses = len(responses)
                     response_counts.append(num_responses)
                 elif '?' in answer:
                     # print(answer)
                     result = answer.split('?')[0] + '?'
-                    responses = answer.split('?')[1].split('\n')
+                    if len(answer.split('?')) > 1:
+                        responses = answer.split('?')[1].split('\n')
+                    else:
+                        responses = ['']
+                    
                     num_responses = len(responses)
                     response_counts.append(num_responses)
                 elif '####' in answer:
                     result = answer.split('####')[0]
-                    responses = answer.split('####')[1].split('\n')
+                    if len(answer.split('####')) > 1:
+                        responses = answer.split('####')[1].split('\n')
+                    else:
+                        responses = ['']
                     responses[0] = '####' + responses[0]
                     num_responses = len(responses)
                     response_counts.append(num_responses)
@@ -147,6 +157,28 @@ def compute_probabilities(all_answers, critic_tokenizer, critic, batch_size=32, 
                 probability_index += count
     
     return answers_prob
+
+def select_high_low_probability_answers(all_answers, answers_prob):
+    highest_probability_answers = []
+    lowest_probability_answers = []
+    extracted_answers = [[] for _ in range(len(all_answers[0]))]
+    for answers in all_answers:
+        for i, answer in enumerate(answers):
+            extracted_answers[i].append(answer)
+                
+    for i, question_answers in enumerate(extracted_answers):
+        question_probs = answers_prob[i]
+        if question_probs:
+            max_prob_index = question_probs.index(max(question_probs))
+            highest_probability_answer = question_answers[max_prob_index]
+            min_prob_index = question_probs.index(min(question_probs))
+            lowest_probability_answer = question_answers[min_prob_index]
+        else:
+            highest_probability_answer = ""
+            lowest_probability_answer = ""
+        highest_probability_answers.append(highest_probability_answer)
+        lowest_probability_answers.append(lowest_probability_answer)
+    return highest_probability_answers, lowest_probability_answers
 
 def select_high_low_probability_answers(all_answers, answers_prob):
     highest_probability_answers = []
@@ -220,10 +252,13 @@ from trl import DPOTrainer
 from torch.optim import AdamW
 
 epochs = 10
-base_lr = 4e-6
+base_lr = 2e-6
 total_steps = len(dataset) * epochs
 
 optimizer = AdamW(model.parameters(), lr=base_lr)
+
+max_epochs_to_aggregate = 10
+epoch_datasets = []  # List to store the datasets from each epoch
 
 import wandb
 import os
@@ -240,39 +275,63 @@ training_args= TrainingArguments(
             logging_steps=1,
             optim="adamw_8bit",
             weight_decay=0.0,
-            lr_scheduler_type="constant",  # Set the scheduler type to "constant"
+            learning_rate = base_lr,
+            lr_scheduler_type="cosine",  # Set the scheduler type to "constant"
             seed=42,
-            output_dir="checkpoints/dpo-tinyllama-5-1",
+            output_dir="checkpoints/dpo-tinyllama-5-2",
+            save_strategy="epoch",
+            save_total_limit=3,
+            report_to="wandb",  # Add this line to enable wandb reporting
+
         )
 
+# Create the learning rate scheduler
+lr_scheduler = get_scheduler(
+    name="cosine",
+    optimizer=optimizer,
+    num_warmup_steps=int(total_steps * 0.1),  # 10% of total steps for warmup
+    num_training_steps=total_steps,
+)
+
+wandb.init(project="LLMRL", config=training_args)  # Initialize wandb run
+
+
+from datasets import concatenate_datasets
+
+
 for epoch in tqdm(range(epochs)):
+    FastLanguageModel.for_inference(model)
     epoch_dataset, rewards = rollout_to_DPO_dataset(dataset, model, tokenizer, critic_tokenizer, critic)
-    model.train()
+    FastLanguageModel.for_training(model)
+    if len(epoch_datasets) >= max_epochs_to_aggregate:
+        epoch_datasets.pop(0)
+    epoch_datasets.append(epoch_dataset)
+    aggregated_dataset = concatenate_datasets(epoch_datasets)
     
     dpo_trainer = DPOTrainer(
         model=model,
         ref_model=None,
         args=training_args,
         beta=0.1,
-        train_dataset=epoch_dataset,
+        train_dataset=aggregated_dataset,
         tokenizer=tokenizer,
         max_length=512,
         max_prompt_length=256,
+        optimizers=(optimizer, lr_scheduler),
     )
     
-    # Create the learning rate scheduler
-    lr_scheduler = get_scheduler(
-        name="cosine",
-        optimizer=optimizer,
-        num_warmup_steps=int(total_steps * 0.1),  # 10% of total steps for warmup
-        num_training_steps=total_steps,
-    )
+    
     
     # Train the model for one epoch
-    dpo_trainer.train()
-    
+    train_results = dpo_trainer.train()
+    # Log the training loss and other metrics to wandb
+    wandb.log({"train/loss": train_results.training_loss}, step=epoch)
+    wandb.log({"train/learning_rate": lr_scheduler.get_last_lr()[0]}, step=epoch)
+
     # Update the learning rate for the next epoch
     lr_scheduler.step()
-    
-model.save_pretrained("checkpoints/dpo-tinyllama-5-1") # Local saving
-tokenizer.save_pretrained("checkpoints/dpo-tinyllama-5-1")
+
+wandb.finish()  # Finish the wandb run
+
+model.save_pretrained("checkpoints/dpo-tinyllama-5-2") # Local saving
+tokenizer.save_pretrained("checkpoints/dpo-tinyllama-5-2")
