@@ -1,6 +1,24 @@
 from transformers import AutoTokenizer
+from unsloth import FastLanguageModel
+from transformers import LlamaForSequenceClassification, AutoTokenizer, LlamaForCausalLM
 
-tokenizer = AutoTokenizer.from_pretrained("checkpoints/tinyLlama-GSM8K-10epochs", padding_side='right', use_fast = False)
+import torch
+max_seq_length = 2048 # Choose any! We auto support RoPE Scaling internally!
+dtype = None # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
+load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be False.
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# #to cuda
+
+generator, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "checkpoints/dpo-tinyllama-5-2", # "unsloth/tinyllama" for 16bit loading
+    max_seq_length = 2048,
+    dtype = None,
+    load_in_4bit = False,
+)
+FastLanguageModel.for_inference(generator) # Enable native 2x faster inference
+tokenizer.padding_side = "left" # Padding side for faster inference
+
 
 EOS_TOKEN = tokenizer.eos_token  # End-of-Sequence token
 prompt = """
@@ -34,29 +52,22 @@ from datasets import load_dataset
 dataset = load_dataset("gsm8k", 'main', split='test')
 dataset = dataset.map(formatting_prompts_func, batched=True)  # Apply the preprocessing function
 
-# from unsloth import FastLanguageModel
-from transformers import LlamaForSequenceClassification, AutoTokenizer, LlamaForCausalLM
-
-import torch
-max_seq_length = 2048 # Choose any! We auto support RoPE Scaling internally!
-dtype = None # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
-load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be False.
 
 
-generator = LlamaForCausalLM.from_pretrained("checkpoints/tinyLlama-GSM8K-10epochs")
-tokenizer = AutoTokenizer.from_pretrained("checkpoints/tinyLlama-GSM8K-10epochs", padding_side='right', use_fast = False)
+# generator = LlamaForCausalLM.from_pretrained("checkpoints/dpo-tinyllama-5-2")
+# tokenizer = AutoTokenizer.from_pretrained("checkpoints/dpo-tinyllama-5-2", padding_side='right', use_fast = False)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#to cuda
 
-generator.to(device)
+# generator.to(device)
 
 #set generator to inference mode
-generator.eval()
+# generator.eval()
 input_text = dataset['input_text']
 import os
 import json
 import re
+from tqdm import tqdm
+
 
 def generate_answers(input_text, generator, tokenizer, output_dir, n_answers=100, batch_size=128):
     os.makedirs(output_dir, exist_ok=True)  # Create the output directory if it doesn't exist
@@ -72,9 +83,9 @@ def generate_answers(input_text, generator, tokenizer, output_dir, n_answers=100
     # Start generating new answers from the next available number
     start_number = max(file_numbers, default=0) + 1
     
-    for n in range(start_number, start_number + n_answers):
+    for n in tqdm(range(start_number, start_number + n_answers), desc="Generating Answer File", position=0):
         all_answers = []
-        for i in range(0, len(input_text), batch_size):
+        for i in tqdm(range(0, len(input_text), batch_size), desc="Generating Batch in the File", position=1, leave=True):
             batch_inputs = input_text[i:i+batch_size]
             batch_inputs = tokenizer(batch_inputs, return_tensors='pt', padding="max_length", truncation=True, max_length=512).to(device)
             outputs = generator.generate(
@@ -100,7 +111,7 @@ def generate_answers(input_text, generator, tokenizer, output_dir, n_answers=100
     
     return all_answers
 
-output_directory = "generated_answers"
+output_directory = "generated_answers_dpo"
 
 with torch.no_grad():
     answers = generate_answers(input_text, generator, tokenizer, output_directory, n_answers=100)
